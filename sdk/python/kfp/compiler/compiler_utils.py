@@ -15,7 +15,7 @@
 
 import collections
 from copy import deepcopy
-from typing import Dict, List, Mapping, Set, Tuple, Union
+from typing import DefaultDict, Dict, List, Mapping, Set, Tuple, Union
 
 from kfp.components import for_loop
 from kfp.components import pipeline_channel
@@ -325,6 +325,45 @@ def get_inputs_for_all_groups(
     return inputs
 
 
+def get_outputs_for_all_groups(
+    pipeline: pipeline_context.Pipeline,
+    task_name_to_parent_groups: Mapping[str, List[str]],
+    group_name_to_parent_groups: Mapping[str, List[str]],
+    all_groups: List[tasks_group.TasksGroup],
+) -> DefaultDict[str, Dict[str, pipeline_channel.PipelineChannel]]:
+    """Gets a dictionary of all task groups keys to an inner dictionary, which
+    maps the channel the task group should surface (value) to the name by which
+    to surface it (key)."""
+
+    # unlike inputs, which will be surfaced as component input parameters,
+    # consumers of surfaced outputs need to have a reference to what the parent
+    # component calls them when they surface them, which will be different than
+    # the producer task name and channel name (the information contained in the
+    # pipeline channel)
+    # for this reason, we use _additional_input_name_for_pipeline_channel here
+    # to set the name of the surfaced output once
+
+    outputs = collections.defaultdict(dict)
+    group_name_to_group = {group.name: group for group in all_groups}
+    group_name_to_children = {
+        group.name: [group.name for group in group.groups] +
+        [task.name for task in group.tasks] for group in all_groups
+    }
+
+    # for group in all_groups:
+    #     if isinstance(group, tasks_group.ExitHandler):
+    #         channel = group.outputs
+    #         print(channel)
+    #         outputs[group.name] = {}
+
+    for task in pipeline.tasks.values():
+        if isinstance(task, tasks_group.ExitHandler):
+            for key, value in task.outputs.items():
+                outputs[task.name] = {key: value}
+
+    return outputs
+
+
 def _get_uncommon_ancestors(
     task_name_to_parent_groups: Mapping[str, List[GroupOrTaskType]],
     group_name_to_parent_groups: Mapping[str, List[tasks_group.TasksGroup]],
@@ -348,6 +387,10 @@ def _get_uncommon_ancestors(
     Returns:
         A tuple which are lists of uncommon ancestors for each task.
     """
+
+    # if getattr(task1, 'is_exit_handler', False) or getattr(task2, 'is_exit_handler', False):
+    #     return([task1.name],[task2.name])
+
     if task1.name in task_name_to_parent_groups:
         task1_groups = task_name_to_parent_groups[task1.name]
     elif task1.name in group_name_to_parent_groups:

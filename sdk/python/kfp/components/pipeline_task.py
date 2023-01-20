@@ -221,6 +221,22 @@ class PipelineTask:
         """A list of the dependent task names."""
         return self._task_spec.dependent_tasks
 
+    def change_inputs(self, task_group_ouputs):
+        """Change the channel inputs to the surface output of the taskgroup."""
+
+        for name, value in self._inputs.items():
+            if isinstance(value, pipeline_channel.PipelineChannel):
+                if value.task_name in task_group_ouputs:
+                    self._inputs[name] = task_group_ouputs[value.task_name]
+
+        # self._channel_inputs = [
+        #     value for _, value in self._inputs.items()
+        #     if isinstance(value, pipeline_channel.PipelineChannel)
+        # ] + pipeline_channel.extract_pipeline_channels_from_any([
+        #     value for _, value in self._inputs.items()
+        #     if not isinstance(value, pipeline_channel.PipelineChannel)
+        # ])
+
     def _extract_container_spec_and_convert_placeholders(
         self, component_spec: structures.ComponentSpec
     ) -> structures.ContainerSpecImplementation:
@@ -468,6 +484,53 @@ class PipelineTask:
         for task in tasks:
             self._task_spec.dependent_tasks.append(task.name)
         return self
+
+    def print_op(self, idx):
+        from kfp.components import pipeline_context
+
+        print('\n\nINDEX : ', str(idx))
+        print('groups in root pipeline: ',
+              pipeline_context.Pipeline.get_default_pipeline().groups[0].groups)
+        print('TASKS OUTSIDE ')
+        for group in pipeline_context.Pipeline.get_default_pipeline().groups:
+            print('group name: ', group, '\n       tasks', group.tasks)
+
+        print('TASKS INSIDE ')
+        for group in pipeline_context.Pipeline.get_default_pipeline(
+        ).groups[0].groups:
+            print('group name: ', group, '\n       tasks', group.tasks)
+
+    def set_exit_task(self, exit_task: 'PipelineTask',
+                      **kwargs) -> 'PipelineTask':
+        """Specifies the task to invoke after the current task exits,
+        irrespective of whether the current task completes successfully."""
+        from kfp.components import pipeline_context
+        from kfp.components.tasks_group import ExitHandler
+
+        # from kfp.pipeline_spec import pipeline_spec_pb2
+        # exit_task._task_spec.trigger_strategy = (pipeline_spec_pb2.PipelineTaskSpec.TriggerPolicy.TriggerStrategy.ALL_UPSTREAM_TASKS_COMPLETED)
+        # self.print_op(1)
+
+        pipeline_context.Pipeline.get_default_pipeline(
+        ).remove_task_from_groups(self)
+
+        # self.print_op(2)
+        # print(exit_task.channel_inputs) # HERE IS THE ISSUE< THERE IS STILL A DEPENDENCE (LINK) BETWEEN EXIT TASK AND TASK
+
+        with ExitHandler(exit_task=exit_task) as exit_handler:
+            # self.print_op(3)
+            pipeline_context.Pipeline.get_default_pipeline().add_task(
+                task=self,
+                add_to_group=not getattr(self, 'is_exit_handler', False))
+            # self.print_op(4)
+
+        exit_handler.surface_outputs(self)
+        exit_task.change_inputs(exit_handler.outputs)
+        pipeline_context.Pipeline.get_default_pipeline().tasks[
+            exit_handler.name] = exit_handler
+        print(exit_handler.outputs)
+
+        # self.print_op(5)
 
 
 # TODO: this function should ideally be in the function kfp.components.structures.check_placeholder_references_valid_io_name, which does something similar, but this causes the exception to be raised at component definition time, rather than compile time. This would break tests that load v1 component YAML, even though that YAML is invalid.
